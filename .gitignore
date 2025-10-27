@@ -47,6 +47,8 @@ sync_garmin.log
 credentials.json
 service-account.json
 token.json
+core-gearbox-*.json
+*.json
 
 # Jupyter Notebook
 .ipynb_checkpoints
