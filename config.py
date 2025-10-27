@@ -18,7 +18,7 @@ GARMIN_EMAIL = os.getenv('GARMIN_EMAIL')
 GARMIN_PASSWORD = os.getenv('GARMIN_PASSWORD')
 
 # Initial sync period (days)
-INITIAL_SYNC_DAYS = 30
+INITIAL_SYNC_DAYS = 365  # Pobierz ostatni rok
 
 # Retry configuration
 MAX_RETRIES = 3
