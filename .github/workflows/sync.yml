@@ -1,0 +1,53 @@
+name: Sync Garmin Activities
+
+on:
+  # Run twice daily at 6:00 and 18:00 Poland time
+  # Using UTC time (Poland is UTC+1 in winter, UTC+2 in summer)
+  schedule:
+    # 5:00 UTC and 17:00 UTC (winter time UTC+1 → 6:00 and 18:00 Poland)
+    - cron: '0 5,17 * * *'
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Sync Garmin activities
+        env:
+          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+        run: |
+          python sync_garmin.py
+
+      - name: Upload logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-logs-${{ github.run_number }}
+          path: sync_garmin.log
+          retention-days: 7
+
+      - name: Notify on failure (optional)
+        if: failure()
+        run: |
+          echo "Sync failed! Check the logs for details."
+          cat sync_garmin.log
