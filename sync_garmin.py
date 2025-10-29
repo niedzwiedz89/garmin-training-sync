@@ -351,8 +351,8 @@ class GarminSync:
                     # Convert None to empty string for Google Sheets
                     row.append(value if value is not None else '')
 
-                # Append row to sheet
-                self.sheet.append_row(row, value_input_option='USER_ENTERED')
+                # Insert row at position 2 (right after header) to keep newest at top
+                self.sheet.insert_row(row, 2, value_input_option='USER_ENTERED')
 
                 written_count += 1
                 logger.info(f"Wrote activity: {activity.get('activity_id')} - {activity.get('title')}")
@@ -417,6 +417,9 @@ class GarminSync:
                 processed_activities.append(processed)
 
         logger.info(f"Successfully processed {len(processed_activities)}/{len(activities)} activities")
+
+        # Sort activities by date (oldest first) so newest ends up on top when inserting
+        processed_activities.sort(key=lambda x: x.get('date', ''), reverse=False)
 
         # Write to Google Sheets
         written = self.write_to_sheets(processed_activities)
