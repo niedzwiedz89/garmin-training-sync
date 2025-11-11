@@ -57,3 +57,12 @@ core-gearbox-*.json
 ~$*.xlsx
 ~$*.xls
 *.tmp
+*.csv
+training_data_*.csv
+
+# Test files
+test_*.py
+test_*.json
+
+# Data files
+dane/

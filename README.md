@@ -1,9 +1,10 @@
 # Garmin Training Sync
 
-Automatyczna synchronizacja aktywności treningowych z Garmin Connect do Google Sheets.
+Automatyczna synchronizacja aktywności treningowych z Garmin Connect do Google Sheets + upload planów treningowych do zegarka Garmin.
 
 ## Funkcje
 
+### Synchronizacja treningów (Garmin → Google Sheets)
 - Automatyczna synchronizacja treningów z Garmin Connect
 - Zapis do Google Sheets online
 - Obsługa 30+ metryk treningowych (dystans, tempo, tętno, kadencja, etc.)
@@ -11,6 +12,17 @@ Automatyczna synchronizacja aktywności treningowych z Garmin Connect do Google 
 - Unikanie duplikatów
 - Szczegółowe logowanie
 - Retry logic przy błędach połączenia
+
+### Upload workoutów (Plan → Garmin) 🆕
+- Parser planu treningowego z formatu Markdown
+- Automatyczne tworzenie strukturowanych workoutów Garmin
+- Wsparcie dla różnych typów treningów:
+  - Podbiegi (hill repeats)
+  - Interwały (400m, 800m, 1km, 2km+)
+  - Tempo run
+  - Długie biegi z wariacjami
+- Poprawna obsługa tempów, dystansów i czasów recovery
+- Masowy upload wszystkich workoutów z 16-tygodniowego planu
 
 ## Metryki treningowe
 
@@ -177,19 +189,70 @@ GitHub Actions uruchomi synchronizację automatycznie:
 - Logi synchronizacji: Actions → wybierz konkretne uruchomienie
 - W przypadku błędu: sprawdź sekcję "Upload logs" w zakładce Artifacts
 
+## Upload workoutów treningowych
+
+### Przygotowanie planu
+
+Stwórz plan treningowy w formacie Markdown (przykład: `plan/plan_treningowy_10km_38min.md`):
+
+```markdown
+### Tydzień 1 (40 km)
+- **PON:** Odpoczynek + **Siła** (30 min)
+- **WT:** Podbiegi 8x30s (tempo 5K, 90s zejście), 2 km R + 2 km WB = **6 km**
+- **CZW:** BC2 8 km w Z2 (4:40-5:00/km) = **8 km**
+- **SOB:** Tempo Run 2x10 min @ 4:05-4:10/km (3 min recovery) + 2 km R + 2 km WB = **9 km**
+- **NIEDZ:** Długi bieg 17 km w Z2 (4:50-5:10/km) = **17 km**
+```
+
+### Upload do Garmin Connect
+
+```bash
+# Aktywuj virtual environment
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate      # Windows
+
+# Uruchom skrypt uploadu
+python upload_workouts_to_garmin.py
+
+# Wybierz opcję:
+# 1 - Upload wszystkich treningów (bez schedulowania do kalendarza)
+# 2 - Upload + scheduluj od dzisiejszej daty
+# 3 - Upload + scheduluj od konkretnej daty
+```
+
+### Usuwanie workoutów
+
+```bash
+# Usuń wszystkie workouty z planu (które zaczynają się od "Tydzień")
+python delete_all_workouts.py
+```
+
+### Format treningów
+
+Parser rozpoznaje:
+- **Podbiegi**: `8x30s (tempo 5K, 90s zejście)`
+- **Interwały krótkie**: `8x400m @ 3:35-3:40/km (400m trucht)`
+- **Długie interwały**: `4x2 km @ 3:50-3:55/km (400m trucht)`
+- **Tempo run**: `2x10 min @ 4:05-4:10/km (3 min recovery)`
+- **Długi bieg**: `17 km w Z2 (4:50-5:10/km)`
+
 ## Struktura projektu
 
 ```
 garmin-training-sync/
 ├── .github/
 │   └── workflows/
-│       └── sync.yml          # GitHub Actions workflow
-├── sync_garmin.py            # Główny skrypt synchronizacji
-├── config.py                 # Konfiguracja (metryki, timezone)
-├── requirements.txt          # Zależności Python
-├── .env.example              # Przykładowy plik .env
-├── .gitignore                # Ignorowane pliki
-└── README.md                 # Ten plik
+│       └── sync.yml                    # GitHub Actions workflow
+├── plan/
+│   └── plan_treningowy_10km_38min.md  # Plan treningowy (Markdown)
+├── sync_garmin.py                      # Synchronizacja Garmin → Sheets
+├── upload_workouts_to_garmin.py        # Upload workoutów do Garmin
+├── delete_all_workouts.py              # Usuwanie workoutów
+├── config.py                           # Konfiguracja (metryki, timezone)
+├── requirements.txt                    # Zależności Python
+├── .env.example                        # Przykładowy plik .env
+├── .gitignore                          # Ignorowane pliki
+└── README.md                           # Ten plik
 ```
 
 ## Konfiguracja zaawansowana
