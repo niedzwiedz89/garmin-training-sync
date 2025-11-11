@@ -374,6 +374,8 @@ MIT License
 
 ## Autor
 
+**Michał Kozera** ([@niedzwiedz89](https://github.com/niedzwiedz89))
+
 Projekt stworzony dla automatyzacji synchronizacji treningów Garmin.
 
 ## Podziękowania
