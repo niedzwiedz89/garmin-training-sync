@@ -153,7 +153,11 @@ class GarminWorkoutUploader:
             if long_int_match:
                 reps = int(long_int_match.group(1))
                 distance_km = float(long_int_match.group(2))
-                pace = long_int_match.group(3).split('-')[0]
+                try:
+                    pace = long_int_match.group(3).split('-')[1]
+                except Exception as e:
+                   print(f'Pojawia się błąd {e}')
+                   pace = long_int_match.group(3).split('-')[0]
 
                 recovery_match = re.search(r'(\d+)m?\s*(?:trucht|recovery)', description)
                 recovery = int(recovery_match.group(1)) if recovery_match else 400
@@ -188,7 +192,13 @@ class GarminWorkoutUploader:
             if interval_match:
                 reps = int(interval_match.group(1))
                 distance = int(interval_match.group(2))
-                pace = interval_match.group(3).split('-')[0]  # bierzemy szybsze tempo
+                #pace = interval_match.group(3).split('-')[0]  # bierzemy szybsze tempo
+
+                try:
+                    pace = interval_match.group(3).split('-')[1]
+                except Exception as e:
+                   print(f'Pojawia się błąd {e}')
+                   pace = interval_match.group(3).split('-')[0]
 
                 # Recovery
                 recovery_match = re.search(r'(\d+)m?\s*trucht', description)
@@ -210,7 +220,13 @@ class GarminWorkoutUploader:
             if tempo_match:
                 reps = int(tempo_match.group(1))
                 minutes = int(tempo_match.group(2))
-                pace = tempo_match.group(3).split('-')[0]
+
+                try:
+                    pace = tempo_match.group(3).split('-')[1]
+                except Exception as e:
+                   print(f'Pojawia się błąd {e}')
+                   pace = tempo_match.group(3).split('-')[0]
+
 
                 recovery_match = re.search(r'(\d+)\s*min\s+recovery', description)
                 recovery_min = int(recovery_match.group(1)) if recovery_match else 2
