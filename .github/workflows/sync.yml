@@ -5,7 +5,7 @@ on:
   # Using UTC time (Poland is UTC+1 in winter, UTC+2 in summer)
   schedule:
     # 5:00 UTC and 17:00 UTC (winter time UTC+1 → 6:00 and 18:00 Poland)
-    - cron: '0 5,17 * * *'
+    #- cron: '0 5,17 * * *'
 
   # Allow manual trigger
   workflow_dispatch:
