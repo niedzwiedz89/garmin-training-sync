@@ -32,7 +32,8 @@ def main():
         workouts = uploader.client.get_workouts(0, 100)
 
         # Filtruj tylko te które zaczynają się od "Tydzień"
-        plan_workouts = [w for w in workouts if w.get('workoutName', '').startswith('Tydzień')]
+        #plan_workouts = [w for w in workouts if w.get('workoutName', '').startswith('Tydzień')]
+        plan_workouts = [w for w in workouts if w.get('workoutName', '').startswith(('CZW', 'WT', 'NIEDZ', 'SOB'))]
 
         print(f"\nZnaleziono {len(plan_workouts)} workoutów do usunięcia:")
         for w in plan_workouts[:10]:  # Pokaż pierwsze 10

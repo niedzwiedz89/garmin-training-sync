@@ -59,10 +59,18 @@ class GarminSync:
 
         for attempt in range(config.MAX_RETRIES):
             try:
+                tokenstore = os.path.join(os.path.expanduser("~"), ".garth_sync_garmin")
                 self.garmin_client = Garmin(config.GARMIN_EMAIL, config.GARMIN_PASSWORD)
-                self.garmin_client.login()
-                logger.info("Successfully connected to Garmin Connect")
-                return True
+                try:
+                    self.garmin_client.login(tokenstore)
+                    logger.info("Successfully connected to Garmin Connect using cached tokens")
+                    return True
+                except Exception:
+                    logger.info("Cached tokens not found or expired, logging in with credentials...")
+                    self.garmin_client.login()
+                    self.garmin_client.garth.dump(tokenstore)
+                    logger.info("Successfully connected to Garmin Connect and cached tokens")
+                    return True
             except Exception as e:
                 logger.warning(f"Garmin connection attempt {attempt + 1}/{config.MAX_RETRIES} failed: {e}")
                 if attempt < config.MAX_RETRIES - 1:
@@ -432,8 +440,16 @@ class GarminSync:
 def main():
     """Main entry point"""
     try:
+        days = None
+        if len(sys.argv) > 1:
+            try:
+                days = int(sys.argv[1])
+            except ValueError:
+                logger.error("The 'days' argument must be an integer.")
+                sys.exit(1)
+                
         syncer = GarminSync()
-        syncer.sync()
+        syncer.sync(days=days)
     except KeyboardInterrupt:
         logger.info("Sync interrupted by user")
         sys.exit(0)

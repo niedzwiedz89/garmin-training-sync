@@ -318,11 +318,13 @@ class GarminWorkoutUploader:
         """
         workout_id = random.randint(1000000, 9999999)
 
+        short_title = re.split(r'[\(,\+]', workout['description'])[0].strip()
+
         # Base template
         workout_json = {
             "workoutId": workout_id,
             "ownerId": None,  # zostanie wypełnione przy upload
-            "workoutName": f"Tydzień {workout['week']}: {workout['day']}",
+            "workoutName": f"Tydzień{workout['week']}:{workout['day']}: {short_title}",
             "description": workout['description'][:250],  # max 250 chars
             "sportType": {
                 "sportTypeId": 1,
@@ -590,7 +592,7 @@ def main():
     print("=" * 60)
 
     # Path do planu treningowego
-    plan_file = Path(__file__).parent / 'plan' / 'plan_treningowy_10km_38min.md'
+    plan_file = Path(__file__).parent / 'plan' / 'plan_treningowy_10km_38min_2.md'
 
     if not plan_file.exists():
         print(f"[ERROR] Nie znaleziono pliku: {plan_file}")

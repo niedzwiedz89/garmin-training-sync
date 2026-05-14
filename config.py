@@ -5,6 +5,10 @@ Configuration file for Garmin Training Sync
 import os
 from datetime import datetime
 import pytz
+from dotenv import load_dotenv
+
+# Załaduj zmienne z .env zanim spróbujesz je odczytać
+load_dotenv()
 
 # Timezone configuration
 TIMEZONE = pytz.timezone('Europe/Warsaw')
