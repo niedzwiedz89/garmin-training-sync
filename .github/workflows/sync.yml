@@ -3,7 +3,7 @@ name: Sync Garmin Activities
 on:
   # Run twice daily at 6:00 and 18:00 Poland time
   # Using UTC time (Poland is UTC+1 in winter, UTC+2 in summer)
-  schedule:
+  #schedule:
     # 5:00 UTC and 17:00 UTC (winter time UTC+1 → 6:00 and 18:00 Poland)
     #- cron: '0 5,17 * * *'
 
