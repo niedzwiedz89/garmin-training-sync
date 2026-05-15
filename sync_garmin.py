@@ -350,6 +350,8 @@ class GarminSync:
 
         written_count = 0
 
+        rows_to_insert = []
+
         for activity in activities:
             try:
                 # Create row in the same order as SHEET_HEADERS
@@ -359,23 +361,26 @@ class GarminSync:
                     # Convert None to empty string for Google Sheets
                     row.append(value if value is not None else '')
 
-                # Insert row at position 2 (right after header) to keep newest at top
-                self.sheet.insert_row(row, 2, value_input_option='USER_ENTERED')
-
-                written_count += 1
-                logger.info(f"Wrote activity: {activity.get('activity_id')} - {activity.get('title')}")
+                rows_to_insert.append(row)
+                logger.info(f"Prepared activity: {activity.get('activity_id')} - {activity.get('title')}")
 
                 # Add to existing IDs to prevent duplicate writes in same session
                 self.existing_activity_ids.add(activity.get('activity_id'))
-
-                # Small delay to avoid rate limiting
-                time.sleep(0.5)
+                written_count += 1
 
             except Exception as e:
-                logger.error(f"Failed to write activity {activity.get('activity_id')}: {e}")
+                logger.error(f"Failed to process activity {activity.get('activity_id')}: {e}")
                 continue
 
-        logger.info(f"Successfully wrote {written_count}/{len(activities)} activities to Google Sheets")
+        if rows_to_insert:
+            try:
+                # Insert all rows at once at position 2 (batch write avoids rate limiting)
+                self.sheet.insert_rows(rows_to_insert, 2, value_input_option='USER_ENTERED')
+                logger.info(f"Successfully batch wrote {written_count}/{len(activities)} activities to Google Sheets")
+            except Exception as e:
+                logger.error(f"Failed to batch write activities: {e}")
+                return 0
+
         return written_count
 
     def sync(self, days: int = None):
@@ -426,8 +431,8 @@ class GarminSync:
 
         logger.info(f"Successfully processed {len(processed_activities)}/{len(activities)} activities")
 
-        # Sort activities by date (oldest first) so newest ends up on top when inserting
-        processed_activities.sort(key=lambda x: x.get('date', ''), reverse=False)
+        # Sort activities by date (newest first) so they are in correct order for batch insert at row 2
+        processed_activities.sort(key=lambda x: x.get('date', ''), reverse=True)
 
         # Write to Google Sheets
         written = self.write_to_sheets(processed_activities)
