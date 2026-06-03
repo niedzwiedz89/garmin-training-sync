@@ -592,7 +592,7 @@ def main():
     print("=" * 60)
 
     # Path do planu treningowego
-    plan_file = Path(__file__).parent / 'plan' / 'plan_treningowy_10km_38min_2.md'
+    plan_file = Path(__file__).parent / 'plan' / 'plan_treningowy_10km_38min_3.md'
 
     if not plan_file.exists():
         print(f"[ERROR] Nie znaleziono pliku: {plan_file}")

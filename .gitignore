@@ -66,3 +66,7 @@ test_*.json
 
 # Data files
 dane/
+
+
+# Others
+plan/
