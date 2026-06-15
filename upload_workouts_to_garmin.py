@@ -10,6 +10,7 @@ import json
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
+import sys
 from garminconnect import Garmin
 from garth.exc import GarthHTTPError
 import requests
@@ -585,14 +586,17 @@ class GarminWorkoutUploader:
             return False
 
 
-def main():
+def main(plan_file_path=None):
     """Main function"""
     print("=" * 60)
     print("Garmin Workout Uploader - Upload Training Plan")
     print("=" * 60)
 
     # Path do planu treningowego
-    plan_file = Path(__file__).parent / 'plan' / 'plan_treningowy_10km_38min_3.md'
+    if plan_file_path:
+        plan_file = Path(plan_file_path)
+    else:
+        plan_file = Path(__file__).parent / 'plan' / 'plan_treningowy_10km_38min_3.md'
 
     if not plan_file.exists():
         print(f"[ERROR] Nie znaleziono pliku: {plan_file}")
@@ -698,4 +702,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:]:
+        main(plan_file_path=sys.argv[1])
+    else:
+        main()
