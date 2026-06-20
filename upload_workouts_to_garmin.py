@@ -97,32 +97,79 @@ class GarminWorkoutUploader:
     def parse_workout_details(self, description):
         """
         Parsuje opis treningu i wyciąga szczegóły:
-        - typ treningu (podbiegi, interwały, tempo run, długi bieg)
+        - typ treningu (podbiegi, interwały, tempo run, długi bieg, easy run, steady state)
         - interwały (ile, jaki dystans/czas, tempo, przerwa)
-        - rozgrzewka/wybieganie
+        - rozgrzewka/wybieganie (km lub minuty)
+
+        Obsługuje formaty:
+        - Stary: "X km R/WB", "Interwały", "BC2", "Długi bieg"
+        - Nowy (plan BS): "BS X min", "RPE X/Y", "Nx(Xs / Ys)", "@tempo 5k"
         """
         details = {
             'type': None,
-            'warmup_km': 2,  # default
-            'cooldown_km': 2,  # default
+            'warmup_km': 2,           # default dystans rozgrzewki
+            'warmup_seconds': None,   # czas rozgrzewki (nowy format BS)
+            'cooldown_km': 2,         # default dystans wybiegania
+            'cooldown_seconds': None, # czas wybiegania (nowy format BS)
+            'main_seconds': None,     # czas głównej części (easy/long run)
             'intervals': [],
             'total_km': 0
         }
 
-        # Wyciągnij całkowity dystans
-        total_km_match = re.search(r'= \*\*(\d+(?:\.\d+)?)\s*km\*\*', description)
+        # Wyciągnij całkowity dystans (obsługuje też ~19 km)
+        total_km_match = re.search(r'=\s*\*\*~?(\d+(?:\.\d+)?)\s*km\*\*', description)
         if total_km_match:
             details['total_km'] = float(total_km_match.group(1))
 
-        # Rozgrzewka
-        warmup_match = re.search(r'(\d+)\s*km\s+R', description)
-        if warmup_match:
-            details['warmup_km'] = int(warmup_match.group(1))
+        # --- Rozgrzewka i wybieganie (stary styl km) ---
+        warmup_km_match = re.search(r'(\d+)\s*km\s+R\b', description)
+        if warmup_km_match:
+            details['warmup_km'] = int(warmup_km_match.group(1))
 
-        # Wybieganie
-        cooldown_match = re.search(r'(\d+)\s*km\s+WB', description)
-        if cooldown_match:
-            details['cooldown_km'] = int(cooldown_match.group(1))
+        cooldown_km_match = re.search(r'(\d+)\s*km\s+WB\b', description)
+        if cooldown_km_match:
+            details['cooldown_km'] = int(cooldown_km_match.group(1))
+
+        # Nowy styl (plan BS): "BS X min + [główny trening] + BS Y min ="
+        has_complex_workout = bool(
+            re.search(r'\d+x', description) or
+            re.search(r'Bieg Ciągły', description, re.IGNORECASE) or
+            re.search(r'\bRPE\b', description) or
+            'BNP' in description
+        )
+        if has_complex_workout:
+            warmup_bs = re.match(r'(?:Długi\s+)?BS\s+(\d+)\s+min\s*\+', description)
+            if warmup_bs:
+                details['warmup_seconds'] = int(warmup_bs.group(1)) * 60
+                details['warmup_km'] = 0  # używamy czasu zamiast dystansu
+            cooldown_bs = re.search(r'\+\s*BS\s+(\d+)\s+min\s*=', description)
+            if cooldown_bs:
+                details['cooldown_seconds'] = int(cooldown_bs.group(1)) * 60
+                details['cooldown_km'] = 0  # używamy czasu zamiast dystansu
+
+        # --- Pomocnicze funkcje ---
+        def parse_duration(time_str, is_seconds=False):
+            """Parsuje czas: '1:30' → 90s, '40' → 40s (is_seconds=True), '2' → 120s (minuty)"""
+            if ':' in time_str:
+                parts = time_str.split(':')
+                return int(parts[0]) * 60 + int(parts[1])
+            val = int(time_str)
+            return val if is_seconds else val * 60
+
+        def rpe_to_pace(rpe_str):
+            """Konwertuje RPE do tempa: RPE 7 ≈ HM pace (4:02), RPE 8 ≈ 10k pace (3:52)"""
+            try:
+                rpe_val = float(re.split(r'[/\-]', rpe_str.strip())[0])
+            except (ValueError, IndexError):
+                rpe_val = 7.0
+            if rpe_val >= 8:
+                return '3:52'
+            elif rpe_val >= 7:
+                return '4:02'
+            else:
+                return '4:30'
+
+        # ==================== DETEKCJA TYPU ====================
 
         # PODBIEGI: 8x30s, 10x40s, etc.
         if 'Podbiegi' in description or 'podbiegi' in description:
@@ -183,7 +230,7 @@ class GarminWorkoutUploader:
                         {'repeat': 1, 'work_distance': d3*1000, 'work_pace': pace, 'recovery_type': 'jog', 'recovery_distance': 400},
                     ]
 
-        # INTERWAŁY: 8x400m, 6x600m, 5x800m, 4x1km, etc.
+        # INTERWAŁY: 8x400m, 6x600m, 5x800m, 4x1km, etc. (stary styl ze słowem "Interwały")
         elif 'Interwały' in description or 'interwały' in description:
             details['type'] = 'intervals'
 
@@ -192,7 +239,6 @@ class GarminWorkoutUploader:
             if interval_match:
                 reps = int(interval_match.group(1))
                 distance = int(interval_match.group(2))
-                #pace = interval_match.group(3).split('-')[0]  # bierzemy szybsze tempo
 
                 try:
                     pace = interval_match.group(3).split('-')[1]
@@ -212,7 +258,126 @@ class GarminWorkoutUploader:
                     'recovery_distance': recovery
                 }]
 
-        # TEMPO RUN: 2x10 min, 3x8 min, 4x6 min @ tempo
+        # NOWE: Interwały RPE minutowe: NxN min (RPE X) na N(:NN) min/trucht
+        # Przykłady: 6x4 min (RPE 7) na 1 min trucht | 8x5 min (RPE 7-8) na 1:30 trucht
+        elif re.search(r'\d+x\d+\s*min\s*\(RPE', description, re.IGNORECASE):
+            details['type'] = 'tempo'
+            rpe_match = re.search(
+                r'(\d+)x(\d+)\s*min\s*\(RPE\s*([\d./\-]+)\)\s*na\s*(\d+(?::\d+)?)\s*(?:min\s*)?trucht',
+                description, re.IGNORECASE
+            )
+            if rpe_match:
+                reps = int(rpe_match.group(1))
+                work_min = int(rpe_match.group(2))
+                rpe_str = rpe_match.group(3)
+                rest_str = rpe_match.group(4)
+                details['intervals'] = [{
+                    'repeat': reps,
+                    'work_duration': work_min * 60,
+                    'work_pace': rpe_to_pace(rpe_str),
+                    'recovery_type': 'jog',
+                    'recovery_duration': parse_duration(rest_str)
+                }]
+
+        # NOWE: Interwały @ tempo 5k/5-10k (czasowe)
+        # Przykłady: 15x(1 min @tempo 5k / 1 min trucht)
+        #            20x(40" @tempo 5k / 1:20 trucht)
+        #            10x(1:30 @tempo 5k / 1:30 trucht)
+        #            8x(2 min @tempo 5-10k / 2 min trucht)
+        elif re.search(r'\d+x\(.*?@tempo', description, re.IGNORECASE):
+            details['type'] = 'intervals'
+            m = re.search(
+                r'(\d+)x\(\s*(\d+(?::\d+)?)(["\']?)\s*(?:min\s*)?@tempo\s*[\d\w\s\-]+?/\s*(\d+(?::\d+)?)\s*(?:min\s*)?trucht\)',
+                description, re.IGNORECASE
+            )
+            if m:
+                reps = int(m.group(1))
+                work_str = m.group(2)
+                had_quote = bool(m.group(3))  # True = czas podany w sekundach (np. 40")
+                rest_str = m.group(4)
+                details['intervals'] = [{
+                    'repeat': reps,
+                    'work_duration': parse_duration(work_str, is_seconds=had_quote),
+                    'work_pace': '3:40',  # ~tempo 5km dla HM 1:25
+                    'recovery_type': 'jog',
+                    'recovery_duration': parse_duration(rest_str)
+                }]
+
+        # NOWE: Interwały sekundowe: Nx(Xs szybko / Ys trucht) lub Nx(X"/Y")
+        # Przykłady: 10x(20" szybko / 40" trucht) | 10x(30" szybko / 1 min trucht) | 5x(20"/40")
+        elif re.search(r'\d+x\(\d+["\']\s*(?:szybko|dynamicznie|/)', description):
+            details['type'] = 'intervals'
+            # Wariant 1: oba czasy w sekundach (z cudzysłowem)
+            sec_match = re.search(
+                r'(\d+)x\((\d+)["\']\s*(?:szybko|dynamicznie)?\s*/\s*(\d+)["\']\s*(?:luź?ny\s*)?trucht\)',
+                description
+            )
+            if not sec_match:
+                # Wariant 2: praca w sekundach, odpoczynek w minutach lub MM:SS
+                sec_match = re.search(
+                    r'(\d+)x\((\d+)["\']\s*(?:szybko|dynamicznie)?\s*/\s*(\d+(?::\d+)?)\s*(?:min\s*)?trucht\)',
+                    description
+                )
+            if not sec_match:
+                # Wariant 3: Nx(X"/Y") bez słów opisowych
+                sec_match = re.search(r'(\d+)x\((\d+)["\']/(\d+)["\']\)', description)
+            if sec_match:
+                reps = int(sec_match.group(1))
+                work_sec = int(sec_match.group(2))
+                rest_str = sec_match.group(3)
+                # Jeśli rest_str nie zawiera ":", traktuj jako minuty; inaczej MM:SS
+                rest_has_quote = bool(re.search(r'(\d+)["\']\s*(?:luź?ny\s*)?trucht', sec_match.group(0)))
+                details['intervals'] = [{
+                    'repeat': reps,
+                    'work_duration': work_sec,  # już w sekundach
+                    'recovery_type': 'jog',
+                    'recovery_duration': parse_duration(rest_str, is_seconds=rest_has_quote)
+                }]
+
+        # NOWE: Minutowe podbicia "dynamicznie/szybko": 8x1 min dynamicznie na 1 min trucht
+        elif re.search(r'\d+x\d+\s*min\s+(?:dynamicznie|szybko)', description, re.IGNORECASE):
+            details['type'] = 'intervals'
+            m = re.search(
+                r'(\d+)x(\d+)\s*min\s+(?:dynamicznie|szybko).*?na\s+(\d+(?::\d+)?)\s*(?:min\s*)?trucht',
+                description, re.IGNORECASE
+            )
+            if m:
+                reps = int(m.group(1))
+                work_min = int(m.group(2))
+                rest_str = m.group(3)
+                details['intervals'] = [{
+                    'repeat': reps,
+                    'work_duration': work_min * 60,
+                    'work_pace': '3:40',
+                    'recovery_type': 'jog',
+                    'recovery_duration': parse_duration(rest_str)
+                }]
+
+        # NOWE: Bieg ciągły z RPE: "30 min Bieg Ciągły (RPE 7)" lub "30 min (RPE 7)"
+        elif re.search(r'\d+\s*min\s*(?:Bieg\s*Ciągły\s*)?\(RPE', description, re.IGNORECASE):
+            details['type'] = 'steady_state'
+            steady_match = re.search(
+                r'(\d+)\s*min\s*(?:Bieg\s*Ciągły\s*)?\(RPE\s*([\d./\-]+)\)',
+                description, re.IGNORECASE
+            )
+            if steady_match:
+                details['main_seconds'] = int(steady_match.group(1)) * 60
+                details['steady_pace'] = rpe_to_pace(steady_match.group(2))
+
+        # NOWE: BNP - Bieg z Narastającą Prędkością (progresywny)
+        elif 'BNP' in description:
+            details['type'] = 'long_run'
+            details['variation'] = 'progressive'
+            bnp_match = re.match(r'(\d+)\s*min\s*BNP', description)
+            if bnp_match:
+                details['main_seconds'] = int(bnp_match.group(1)) * 60
+            # Cały czas w opisie, bez osobnej rozgrzewki/wybiegania
+            details['warmup_km'] = 0
+            details['cooldown_km'] = 0
+            details['warmup_seconds'] = None
+            details['cooldown_seconds'] = None
+
+        # TEMPO RUN: 2x10 min, 3x8 min, 4x6 min @ tempo (stary format)
         elif 'Tempo Run' in description or 'tempo' in description.lower():
             details['type'] = 'tempo'
 
@@ -227,7 +392,6 @@ class GarminWorkoutUploader:
                    print(f'Pojawia się błąd {e}')
                    pace = tempo_match.group(3).split('-')[0]
 
-
                 recovery_match = re.search(r'(\d+)\s*min\s+recovery', description)
                 recovery_min = int(recovery_match.group(1)) if recovery_match else 2
 
@@ -239,7 +403,7 @@ class GarminWorkoutUploader:
                     'recovery_duration': recovery_min * 60
                 }]
 
-        # DŁUGI BIEG: BC2 z wariacjami
+        # DŁUGI BIEG: BC2 z wariacjami (stary format)
         elif 'Długi bieg' in description or 'BC2' in description:
             details['type'] = 'long_run'
 
@@ -262,6 +426,29 @@ class GarminWorkoutUploader:
                     details['tempo_pace'] = tempo_km_match.group(2)
             else:
                 details['variation'] = 'easy'
+
+        # NOWE: Długi bieg spokojny BS: "Długi BS X min"
+        elif re.match(r'Długi\s+BS\s+\d+\s*min', description):
+            details['type'] = 'long_run'
+            details['variation'] = 'easy'
+            long_bs_match = re.match(r'Długi\s+BS\s+(\d+)\s*min', description)
+            if long_bs_match:
+                details['main_seconds'] = int(long_bs_match.group(1)) * 60
+            details['warmup_km'] = 0
+            details['cooldown_km'] = 0
+
+        # NOWE: Prosty bieg spokojny BS: "BS X min"
+        elif re.match(r'BS\s+\d+\s*min', description):
+            details['type'] = 'easy_run'
+            bs_match = re.match(r'BS\s+(\d+)\s*min', description)
+            if bs_match:
+                details['main_seconds'] = int(bs_match.group(1)) * 60
+            details['warmup_km'] = 0
+            details['cooldown_km'] = 0
+
+        # Walidacja: typy wymagające interwałów muszą je mieć (np. nie parsujemy startu wyścigu)
+        if details['type'] in ['intervals', 'long_intervals', 'hill_repeats', 'tempo'] and not details['intervals']:
+            return None
 
         return details if details['type'] else None
 
@@ -338,7 +525,7 @@ class GarminWorkoutUploader:
         step_id = random.randint(7000000000, 7999999999)
 
         # WARMUP
-        if details['warmup_km'] > 0:
+        if details.get('warmup_seconds') or details['warmup_km'] > 0:
             warmup_step = {
                 "type": "ExecutableStepDTO",
                 "stepId": step_id,
@@ -354,7 +541,10 @@ class GarminWorkoutUploader:
                 "targetValueOne": None,
                 "targetValueTwo": None
             }
-            warmup_step.update(self.create_distance_condition(details['warmup_km'] * 1000))
+            if details.get('warmup_seconds'):
+                warmup_step.update(self.create_time_condition(details['warmup_seconds']))
+            else:
+                warmup_step.update(self.create_distance_condition(details['warmup_km'] * 1000))
             steps.append(warmup_step)
             step_id += 1
 
@@ -382,7 +572,7 @@ class GarminWorkoutUploader:
                     work_step.update(self.create_time_condition(interval_set['work_duration']))
 
                 # Target: pace
-                if 'work_pace' in interval_set:
+                if interval_set.get('work_pace'):
                     pace_mps = self.pace_to_mps(interval_set['work_pace'])
                     work_step["targetType"] = {
                         "workoutTargetTypeId": 6,
@@ -439,13 +629,9 @@ class GarminWorkoutUploader:
                 steps.append(repeat_step)
 
         elif details['type'] == 'long_run':
-            # Długi bieg - pojedynczy step z targetem czasu/dystansu
-            main_distance = details['total_km'] - details['warmup_km'] - details['cooldown_km']
-
-            if details.get('variation') == 'tempo_finish':
-                # Easy part
-                easy_distance = main_distance - details['tempo_km']
-                easy_step = {
+            if details.get('main_seconds'):
+                # Czas-based: Długi BS lub BNP
+                main_step = {
                     "type": "ExecutableStepDTO",
                     "stepId": step_id,
                     "stepOrder": len(steps) + 1,
@@ -460,54 +646,130 @@ class GarminWorkoutUploader:
                     "targetValueOne": None,
                     "targetValueTwo": None
                 }
-                easy_step.update(self.create_distance_condition(int(easy_distance * 1000)))
-                steps.append(easy_step)
+                main_step.update(self.create_time_condition(details['main_seconds']))
+                steps.append(main_step)
                 step_id += 1
-
-                # Tempo finish
-                pace_mps = self.pace_to_mps(details['tempo_pace'])
-                tempo_step = {
-                    "type": "ExecutableStepDTO",
-                    "stepId": step_id,
-                    "stepOrder": len(steps) + 1,
-                    "stepType": {
-                        "stepTypeId": 3,
-                        "stepTypeKey": "interval"
-                    },
-                    "targetType": {
-                        "workoutTargetTypeId": 6,
-                        "workoutTargetTypeKey": "pace.zone"
-                    },
-                    "targetValueOne": pace_mps - 0.15,
-                    "targetValueTwo": pace_mps + 0.15
-                }
-                tempo_step.update(self.create_distance_condition(details['tempo_km'] * 1000))
-                steps.append(tempo_step)
-                step_id += 1
-
             else:
-                # Easy run - no target
-                easy_run_step = {
-                    "type": "ExecutableStepDTO",
-                    "stepId": step_id,
-                    "stepOrder": len(steps) + 1,
-                    "stepType": {
-                        "stepTypeId": 3,
-                        "stepTypeKey": "interval"
-                    },
-                    "targetType": {
-                        "workoutTargetTypeId": 1,
-                        "workoutTargetTypeKey": "no.target"
-                    },
-                    "targetValueOne": None,
-                    "targetValueTwo": None
-                }
-                easy_run_step.update(self.create_distance_condition(int(main_distance * 1000)))
-                steps.append(easy_run_step)
-                step_id += 1
+                # Dystans-based: stary BC2/Długi bieg
+                main_distance = details['total_km'] - details['warmup_km'] - details['cooldown_km']
+
+                if details.get('variation') == 'tempo_finish':
+                    # Easy part
+                    easy_distance = main_distance - details['tempo_km']
+                    easy_step = {
+                        "type": "ExecutableStepDTO",
+                        "stepId": step_id,
+                        "stepOrder": len(steps) + 1,
+                        "stepType": {
+                            "stepTypeId": 3,
+                            "stepTypeKey": "interval"
+                        },
+                        "targetType": {
+                            "workoutTargetTypeId": 1,
+                            "workoutTargetTypeKey": "no.target"
+                        },
+                        "targetValueOne": None,
+                        "targetValueTwo": None
+                    }
+                    easy_step.update(self.create_distance_condition(int(easy_distance * 1000)))
+                    steps.append(easy_step)
+                    step_id += 1
+
+                    # Tempo finish
+                    pace_mps = self.pace_to_mps(details['tempo_pace'])
+                    tempo_step = {
+                        "type": "ExecutableStepDTO",
+                        "stepId": step_id,
+                        "stepOrder": len(steps) + 1,
+                        "stepType": {
+                            "stepTypeId": 3,
+                            "stepTypeKey": "interval"
+                        },
+                        "targetType": {
+                            "workoutTargetTypeId": 6,
+                            "workoutTargetTypeKey": "pace.zone"
+                        },
+                        "targetValueOne": pace_mps - 0.15,
+                        "targetValueTwo": pace_mps + 0.15
+                    }
+                    tempo_step.update(self.create_distance_condition(details['tempo_km'] * 1000))
+                    steps.append(tempo_step)
+                    step_id += 1
+
+                else:
+                    # Easy run - no target
+                    easy_run_step = {
+                        "type": "ExecutableStepDTO",
+                        "stepId": step_id,
+                        "stepOrder": len(steps) + 1,
+                        "stepType": {
+                            "stepTypeId": 3,
+                            "stepTypeKey": "interval"
+                        },
+                        "targetType": {
+                            "workoutTargetTypeId": 1,
+                            "workoutTargetTypeKey": "no.target"
+                        },
+                        "targetValueOne": None,
+                        "targetValueTwo": None
+                    }
+                    easy_run_step.update(self.create_distance_condition(int(main_distance * 1000)))
+                    steps.append(easy_run_step)
+                    step_id += 1
+
+        elif details['type'] == 'easy_run':
+            # Prosty bieg spokojny (BS X min) - cały trening w jednym stepie czasowym
+            easy_step = {
+                "type": "ExecutableStepDTO",
+                "stepId": step_id,
+                "stepOrder": len(steps) + 1,
+                "stepType": {
+                    "stepTypeId": 3,
+                    "stepTypeKey": "interval"
+                },
+                "targetType": {
+                    "workoutTargetTypeId": 1,
+                    "workoutTargetTypeKey": "no.target"
+                },
+                "targetValueOne": None,
+                "targetValueTwo": None
+            }
+            if details.get('main_seconds'):
+                easy_step.update(self.create_time_condition(details['main_seconds']))
+            elif details['total_km'] > 0:
+                easy_step.update(self.create_distance_condition(int(details['total_km'] * 1000)))
+            else:
+                easy_step.update(self.create_time_condition(3600))  # fallback 1h
+            steps.append(easy_step)
+            step_id += 1
+
+        elif details['type'] == 'steady_state':
+            # Bieg ciągły z zadanym tempem RPE
+            pace_mps = self.pace_to_mps(details.get('steady_pace', '4:02'))
+            steady_step = {
+                "type": "ExecutableStepDTO",
+                "stepId": step_id,
+                "stepOrder": len(steps) + 1,
+                "stepType": {
+                    "stepTypeId": 3,
+                    "stepTypeKey": "interval"
+                },
+                "targetType": {
+                    "workoutTargetTypeId": 6,
+                    "workoutTargetTypeKey": "pace.zone"
+                },
+                "targetValueOne": pace_mps - 0.15,
+                "targetValueTwo": pace_mps + 0.15
+            }
+            if details.get('main_seconds'):
+                steady_step.update(self.create_time_condition(details['main_seconds']))
+            else:
+                steady_step.update(self.create_time_condition(1800))  # fallback 30 min
+            steps.append(steady_step)
+            step_id += 1
 
         # COOLDOWN
-        if details['cooldown_km'] > 0:
+        if details.get('cooldown_seconds') or details['cooldown_km'] > 0:
             cooldown_step = {
                 "type": "ExecutableStepDTO",
                 "stepId": step_id,
@@ -523,7 +785,10 @@ class GarminWorkoutUploader:
                 "targetValueOne": None,
                 "targetValueTwo": None
             }
-            cooldown_step.update(self.create_distance_condition(details['cooldown_km'] * 1000))
+            if details.get('cooldown_seconds'):
+                cooldown_step.update(self.create_time_condition(details['cooldown_seconds']))
+            else:
+                cooldown_step.update(self.create_distance_condition(details['cooldown_km'] * 1000))
             steps.append(cooldown_step)
 
         # Add segment with all steps
@@ -595,7 +860,7 @@ def main(plan_file_path=None):
     if plan_file_path:
         plan_file = Path(plan_file_path)
     else:
-        plan_file = Path(__file__).parent / 'plan' / 'plan_treningowy_10km_38min_3.md'
+        plan_file = Path(__file__).parent / 'plan' / 'plan_treningowy_21km_85min.md'        
 
     if not plan_file.exists():
         print(f"[ERROR] Nie znaleziono pliku: {plan_file}")
