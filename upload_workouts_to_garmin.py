@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 from garminconnect import Garmin
-from garth.exc import GarthHTTPError
 import requests
 from dotenv import load_dotenv
 
