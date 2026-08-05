@@ -1,13 +1,11 @@
 name: Sync Garmin Activities
 
 on:
-  # Run twice daily at 6:00 and 18:00 Poland time
-  # Using UTC time (Poland is UTC+1 in winter, UTC+2 in summer)
-  #schedule:
-    # 5:00 UTC and 17:00 UTC (winter time UTC+1 → 6:00 and 18:00 Poland)
-    #- cron: '0 5,17 * * *'
+  # 16:00 UTC = 18:00 czasu polskiego latem, 17:00 zimą (cron w Actions chodzi tylko po UTC).
+  # Raz dziennie, wieczorem - Garmin blokuje IP GitHuba przy częstym logowaniu.
+  schedule:
+    - cron: '0 21 * * *'
 
-  # Allow manual trigger
   workflow_dispatch:
 
 jobs:
@@ -22,7 +20,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: Install dependencies
@@ -32,11 +30,13 @@ jobs:
 
       - name: Sync Garmin activities
         env:
+          # GARMINTOKENS ma priorytet nad logowaniem hasłem - runner nie zachowuje cache'a w ~
+          GARMINTOKENS: ${{ secrets.GARMINTOKENS }}
           GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: |
-          python sync_garmin.py
+          python sync_garmin.py 3
 
       - name: Upload logs (on failure)
         if: failure()
