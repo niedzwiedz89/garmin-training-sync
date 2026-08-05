@@ -13,7 +13,7 @@ def main():
         garmin.login()
 
         # Pobranie tokenów sesji i spakowanie ich do jednego ciągu znaków (JSON)
-        token_string = garmin.garth.dumps()
+        token_string = garmin.client.dumps()
 
         print("\n" + "=" * 50)
         print("SUKCES! OTO TWÓJ TOKEN SESJI:")

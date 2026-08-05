@@ -58,16 +58,9 @@ def main():
             workout_name = workout['workoutName']
 
             try:
-                # Użyj garth bezpośrednio - DELETE /workout-service/workout/{id}
-                delete_url = f"/workout-service/workout/{workout_id}"
-                result = uploader.client.garth.delete("connectapi", delete_url)
-
-                if result.status_code in [200, 201, 204]:
-                    print(f"[OK] Usunięto: {workout_name}")
-                    deleted += 1
-                else:
-                    print(f"[ERROR] Nie udało się usunąć {workout_name}: HTTP {result.status_code}")
-                    failed += 1
+                uploader.client.delete_workout(workout_id)
+                print(f"[OK] Usunięto: {workout_name}")
+                deleted += 1
 
                 time.sleep(0.5)  # Delay żeby nie przeciążyć API
             except Exception as e:

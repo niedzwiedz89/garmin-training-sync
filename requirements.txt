@@ -1,4 +1,4 @@
-garminconnect>=0.2.0
+garminconnect==0.3.8
 gspread>=6.0.0
 google-auth>=2.23.0
 google-auth-oauthlib>=1.1.0

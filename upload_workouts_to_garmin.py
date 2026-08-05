@@ -32,9 +32,17 @@ class GarminWorkoutUploader:
 
     def connect(self):
         """Połączenie z Garmin Connect"""
+        # Ten sam tokenstore co sync_garmin.py - logowanie hasłem wywołuje 429/MFA po stronie Garmina
+        tokenstore = os.getenv('GARMINTOKENS') or os.path.join(
+            os.path.expanduser("~"), ".garth_sync_garmin")
         try:
             self.client = Garmin(self.email, self.password)
-            self.client.login()
+            try:
+                self.client.login(tokenstore)
+            except Exception:
+                self.client.login()
+                if len(tokenstore) <= 512:
+                    self.client.client.dump(tokenstore)
             print("[OK] Połączono z Garmin Connect")
             return True
         except Exception as e:
@@ -823,28 +831,12 @@ class GarminWorkoutUploader:
             return False
 
     def schedule_workout(self, workout_id, date):
-        """
-        Scheduleuje workout na konkretną datę w kalendarzu Garmin
-        Używa /proxy/workout-service/schedule/{workout_id}
-        """
+        """Scheduleuje workout na konkretną datę w kalendarzu Garmin"""
+        date_str = date.strftime("%Y-%m-%d")
         try:
-            # Endpoint: POST /proxy/workout-service/schedule/{workout_id}
-            schedule_url = f"/proxy/workout-service/schedule/{workout_id}"
-            schedule_payload = {
-                "date": date.strftime("%Y-%m-%d")
-            }
-
-            # Użyj garth.post
-            result = self.client.garth.post("connect", schedule_url, json=schedule_payload)
-
-            if result.status_code in [200, 201, 204]:
-                print(f"    -> Scheduled for {date.strftime('%Y-%m-%d')}")
-                return True
-            else:
-                print(f"  [ERROR] Nie udało się zaplanować: {result.status_code}")
-                print(f"  [ERROR] Response: {result.text}")
-                return False
-
+            self.client.schedule_workout(workout_id, date_str)
+            print(f"    -> Scheduled for {date_str}")
+            return True
         except Exception as e:
             print(f"  [ERROR] Błąd planowania: {e}")
             return False

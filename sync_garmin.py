@@ -59,16 +59,25 @@ class GarminSync:
 
         for attempt in range(config.MAX_RETRIES):
             try:
-                tokenstore = os.path.join(os.path.expanduser("~"), ".garth_sync_garmin")
+                # GARMINTOKENS = tokeny podane wprost (sekret w CI), inaczej katalog w profilu
+                tokenstore = os.getenv('GARMINTOKENS') or os.path.join(
+                    os.path.expanduser("~"), ".garth_sync_garmin")
+                inline_tokens = len(tokenstore) > 512
+                had_tokens = inline_tokens or os.path.exists(
+                    os.path.join(tokenstore, 'garmin_tokens.json'))
+
                 self.garmin_client = Garmin(config.GARMIN_EMAIL, config.GARMIN_PASSWORD)
                 try:
                     self.garmin_client.login(tokenstore)
-                    logger.info("Successfully connected to Garmin Connect using cached tokens")
+                    logger.info(
+                        "Successfully connected to Garmin Connect (%s)",
+                        "stored tokens" if had_tokens else "credential login, tokens saved")
                     return True
                 except Exception:
-                    logger.info("Cached tokens not found or expired, logging in with credentials...")
+                    logger.info("Stored tokens missing or expired, logging in with credentials...")
                     self.garmin_client.login()
-                    self.garmin_client.garth.dump(tokenstore)
+                    if not inline_tokens:
+                        self.garmin_client.client.dump(tokenstore)
                     logger.info("Successfully connected to Garmin Connect and cached tokens")
                     return True
             except Exception as e:
