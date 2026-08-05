@@ -1,7 +1,7 @@
 name: Sync Garmin Activities
 
 on:
-  # 16:00 UTC = 18:00 czasu polskiego latem, 17:00 zimą (cron w Actions chodzi tylko po UTC).
+  # 21:00 UTC = 23:00 czasu polskiego latem, 24:00 zimą (cron w Actions chodzi tylko po UTC).
   # Raz dziennie, wieczorem - Garmin blokuje IP GitHuba przy częstym logowaniu.
   schedule:
     - cron: '0 21 * * *'
