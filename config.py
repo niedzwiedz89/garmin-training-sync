@@ -155,4 +155,8 @@ SHEET_HEADERS = [
     'max_power',
     'moving_time_min',
     'elapsed_time_min',
+    'te_label',
+    'ana_te',
+    'training_load',
+    'quality_json',
 ]

@@ -43,6 +43,7 @@ class GarminSync:
         self.garmin_client = None
         self.sheet = None
         self.existing_activity_ids = set()
+        self.workout_cache = {}
 
     def connect_garmin(self) -> bool:
         """
@@ -134,10 +135,21 @@ class GarminSync:
                 # Share with your email (optional - extract from credentials if needed)
                 # spreadsheet.share('your-email@gmail.com', perm_type='user', role='writer')
 
-            # Initialize headers if sheet is empty
-            if not self.sheet.row_values(1):
+            headers = self.sheet.row_values(1)
+            if not headers:
                 self.sheet.append_row(config.SHEET_HEADERS)
                 logger.info("Initialized spreadsheet headers")
+            elif headers != config.SHEET_HEADERS[:len(headers)] or len(headers) < len(config.SHEET_HEADERS):
+                # kolejnosc kolumn musi odpowiadac SHEET_HEADERS - wiersze sa budowane po indeksie
+                if headers == config.SHEET_HEADERS[:len(headers)]:
+                    self.sheet.update(
+                        [config.SHEET_HEADERS],
+                        f"A1:{gspread.utils.rowcol_to_a1(1, len(config.SHEET_HEADERS))}")
+                    logger.info(f"Extended headers to {len(config.SHEET_HEADERS)} columns")
+                else:
+                    logger.error("Sheet headers do not match SHEET_HEADERS - aborting to avoid "
+                                 "writing values into wrong columns")
+                    return False
 
             # Load existing activity IDs to avoid duplicates
             self._load_existing_activities()
@@ -217,6 +229,143 @@ class GarminSync:
                     return []
 
         return []
+
+    @staticmethod
+    def _pace(speed_mps: Optional[float]) -> Optional[str]:
+        """m/s -> 'mm:ss' na kilometr"""
+        if not speed_mps or speed_mps <= 0:
+            return None
+        minutes, seconds = divmod(int(round(1000 / speed_mps)), 60)
+        return f"{minutes}:{seconds:02d}"
+
+    def _workout_plan(self, workout_id: Any) -> Optional[Dict[str, Any]]:
+        """Cele z definicji workoutu: ile powtorzen, jak dlugie, w jakim tempie"""
+        if not workout_id:
+            return None
+        if workout_id in self.workout_cache:
+            return self.workout_cache[workout_id]
+
+        plan = None
+        try:
+            workout = self.garmin_client.get_workout_by_id(workout_id)
+            for segment in workout.get('workoutSegments', []):
+                for step in segment.get('workoutSteps', []):
+                    if step.get('type') != 'RepeatGroupDTO':
+                        continue
+                    for sub in step.get('workoutSteps', []):
+                        if (sub.get('stepType') or {}).get('stepTypeKey') != 'interval':
+                            continue
+                        cond = (sub.get('endCondition') or {}).get('conditionTypeKey')
+                        value = sub.get('endConditionValue')
+                        t1, t2 = sub.get('targetValueOne'), sub.get('targetValueTwo')
+                        plan = {
+                            'powtorzen': step.get('numberOfIterations'),
+                            'krok': (f"{int(value)}s" if cond == 'time'
+                                     else f"{int(value)}m" if value else None),
+                            'cel': (f"{self._pace(max(t1, t2))}-{self._pace(min(t1, t2))}"
+                                    if t1 and t2 else None),
+                        }
+        except Exception as e:
+            logger.debug(f"Could not read workout {workout_id}: {e}")
+
+        self.workout_cache[workout_id] = plan
+        return plan
+
+    def build_quality(self, activity: Dict[str, Any]) -> Optional[str]:
+        """
+        Profil jakosciowy sesji jako JSON. Pola darmowe ida z podsumowania aktywnosci,
+        odcinki i cele dociagane tylko dla sesji ze struktura (1-2 dodatkowe zapytania).
+        """
+        try:
+            quality: Dict[str, Any] = {
+                'label': activity.get('trainingEffectLabel'),
+                'te': {'aer': activity.get('aerobicTrainingEffect'),
+                       'ana': activity.get('anaerobicTrainingEffect')},
+            }
+            load = activity.get('activityTrainingLoad')
+            if load:
+                quality['load'] = round(load, 1)
+
+            summaries = {s.get('splitType'): s for s in (activity.get('splitSummaries') or [])}
+            interval = summaries.get('INTERVAL_ACTIVE')
+            # pojedynczy INTERVAL_ACTIVE to zwykle wybieganie z autolapami, nie sesja ze struktura
+            if not interval or (interval.get('noOfSplits') or 0) < 2:
+                return json.dumps(quality, ensure_ascii=False)
+
+            quality['praca'] = {
+                'km': round((interval.get('distance') or 0) / 1000, 2),
+                'tempo': self._pace(interval.get('averageSpeed')),
+            }
+
+            laps = (self.garmin_client.get_activity_splits(activity['activityId']) or {}).get('lapDTOs', [])
+            robocze = [l for l in laps
+                       if l.get('intensityType') == 'ACTIVE' and (l.get('distance') or 0) > 50]
+            przerwy = [l for l in laps if l.get('intensityType') in ('RECOVERY', 'REST')]
+
+            if robocze:
+                tempa_s = [1000 / l['averageSpeed'] for l in robocze if l.get('averageSpeed')]
+                # HR i kadencja liczone z okrazen - podsumowanie z listy aktywnosci ich nie zawiera
+                czas = sum(l.get('duration') or 0 for l in robocze) or 1
+
+                def srednia(pole):
+                    wazona = sum((l.get(pole) or 0) * (l.get('duration') or 0) for l in robocze)
+                    return round(wazona / czas) or None
+
+                quality.setdefault('praca', {})
+                quality['praca'].update({
+                    'wykonane': len(robocze),
+                    'tempa': [self._pace(l.get('averageSpeed')) for l in robocze],
+                    'hr': srednia('averageHR'),
+                    'kadencja': srednia('averageRunCadence'),
+                    'gct': srednia('groundContactTime'),
+                })
+                if tempa_s:
+                    quality['fade_s'] = round(tempa_s[-1] - tempa_s[0])
+                    quality['rozrzut_s'] = round(max(tempa_s) - min(tempa_s))
+                if przerwy:
+                    quality['przerwa_s'] = round(sum(l.get('duration') or 0 for l in przerwy) / len(przerwy))
+
+                # score bez zdefiniowanego celu zawsze wynosi 100 - wtedy nie niesie informacji
+                oceny = [l['directWorkoutComplianceScore'] for l in robocze
+                         if l.get('directWorkoutComplianceScore') is not None]
+                plan = self._workout_plan(activity.get('workoutId'))
+                if plan:
+                    quality['plan'] = plan
+                    if plan.get('powtorzen'):
+                        quality['kompletnosc'] = round(100 * len(robocze) / plan['powtorzen'])
+                if oceny and plan and plan.get('cel'):
+                    quality['zgodnosc'] = {'srednia': round(sum(oceny) / len(oceny)),
+                                           'per_powt': [round(o) for o in oceny]}
+
+            quality['opis'] = self._opis(quality)
+            return json.dumps(quality, ensure_ascii=False)
+
+        except Exception as e:
+            logger.warning(f"Could not build quality profile for {activity.get('activityId')}: {e}")
+            return None
+
+    @staticmethod
+    def _opis(q: Dict[str, Any]) -> str:
+        """Jednolinijkowe streszczenie sesji dla czlowieka"""
+        praca, plan = q.get('praca') or {}, q.get('plan') or {}
+        czesci = []
+        if praca.get('wykonane'):
+            ile = (f"{praca['wykonane']}/{plan['powtorzen']}" if plan.get('powtorzen')
+                   else str(praca['wykonane']))
+            czesci.append(f"{ile} x {plan.get('krok') or '?'} @{praca.get('tempo') or '?'}")
+        elif praca.get('km'):
+            czesci.append(f"praca {praca['km']} km @{praca.get('tempo') or '?'}")
+        if plan.get('cel'):
+            czesci.append(f"cel {plan['cel']}")
+        if q.get('przerwa_s'):
+            czesci.append(f"p.{q['przerwa_s']}s")
+        if q.get('fade_s') is not None:
+            czesci.append(f"fade {q['fade_s']:+d}s")
+        if q.get('zgodnosc'):
+            czesci.append(f"zgodnosc {q['zgodnosc']['srednia']}%")
+        elif praca.get('wykonane'):
+            czesci.append("zgodnosc - (brak celu tempa)")
+        return " | ".join(czesci) or (q.get('label') or '')
 
     def process_activity(self, activity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -336,6 +485,12 @@ class GarminSync:
 
             elapsed_duration_s = activity.get('elapsedDuration')
             processed['elapsed_time_min'] = round(elapsed_duration_s / 60, 2) if elapsed_duration_s else None
+
+            processed['te_label'] = activity.get('trainingEffectLabel')
+            processed['ana_te'] = activity.get('anaerobicTrainingEffect')
+            training_load = activity.get('activityTrainingLoad')
+            processed['training_load'] = round(training_load, 1) if training_load else None
+            processed['quality_json'] = self.build_quality(activity)
 
             return processed
 

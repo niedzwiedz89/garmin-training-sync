@@ -320,24 +320,36 @@ class GarminWorkoutUploader:
                 r'(\d+)x\((\d+)["\']\s*(?:szybko|dynamicznie)?\s*/\s*(\d+)["\']\s*(?:luź?ny\s*)?trucht\)',
                 description
             )
+            rest_has_quote = True
             if not sec_match:
                 # Wariant 2: praca w sekundach, odpoczynek w minutach lub MM:SS
                 sec_match = re.search(
                     r'(\d+)x\((\d+)["\']\s*(?:szybko|dynamicznie)?\s*/\s*(\d+(?::\d+)?)\s*(?:min\s*)?trucht\)',
                     description
                 )
+                rest_has_quote = False
             if not sec_match:
-                # Wariant 3: Nx(X"/Y") bez słów opisowych
+                # Wariant 3: Nx(X"/Y") bez słów opisowych - oba czasy w sekundach
                 sec_match = re.search(r'(\d+)x\((\d+)["\']/(\d+)["\']\)', description)
+                rest_has_quote = True
             if sec_match:
                 reps = int(sec_match.group(1))
                 work_sec = int(sec_match.group(2))
                 rest_str = sec_match.group(3)
-                # Jeśli rest_str nie zawiera ":", traktuj jako minuty; inaczej MM:SS
-                rest_has_quote = bool(re.search(r'(\d+)["\']\s*(?:luź?ny\s*)?trucht', sec_match.group(0)))
+                # Tempa z realnych wykonań tych odcinków; szerokie widełki, bo plan zakłada
+                # bieg "z zapasem" - cel ma mierzyć, a nie prowadzić w trakcie odcinka
+                if work_sec <= 25:
+                    short_pace = '3:25'
+                elif work_sec <= 35:
+                    short_pace = '3:28'
+                else:
+                    short_pace = '3:15'
+
                 details['intervals'] = [{
                     'repeat': reps,
                     'work_duration': work_sec,  # już w sekundach
+                    'work_pace': short_pace,
+                    'pace_tolerance': 12,
                     'recovery_type': 'jog',
                     'recovery_duration': parse_duration(rest_str, is_seconds=rest_has_quote)
                 }]
@@ -474,6 +486,16 @@ class GarminWorkoutUploader:
         mps = 1000.0 / total_seconds_per_km
         return round(mps, 2)
 
+    def pace_window(self, pace_str, tolerance_s=10):
+        """
+        Widełki tempa w m/s z tolerancji podanej w sek/km. Stałe +-0.15 m/s dawało przy
+        odcinkach 3:15/km tylko +-6 s/km, a przy 4:00/km +-9 s/km.
+        Zwraca (wolniejsze, szybsze) - Garmin oczekuje targetValueOne < targetValueTwo.
+        """
+        minutes, seconds = pace_str.split(':')
+        base = int(minutes) * 60 + int(seconds)
+        return round(1000.0 / (base + tolerance_s), 3), round(1000.0 / (base - tolerance_s), 3)
+
     def create_distance_condition(self, distance_meters):
         """
         Tworzy prawidłową strukturę endCondition dla dystansu
@@ -581,13 +603,14 @@ class GarminWorkoutUploader:
 
                 # Target: pace
                 if interval_set.get('work_pace'):
-                    pace_mps = self.pace_to_mps(interval_set['work_pace'])
+                    wolniej, szybciej = self.pace_window(
+                        interval_set['work_pace'], interval_set.get('pace_tolerance', 10))
                     work_step["targetType"] = {
                         "workoutTargetTypeId": 6,
                         "workoutTargetTypeKey": "pace.zone"
                     }
-                    work_step["targetValueOne"] = pace_mps - 0.15  # -10 sec/km tolerance
-                    work_step["targetValueTwo"] = pace_mps + 0.15  # +10 sec/km tolerance
+                    work_step["targetValueOne"] = wolniej
+                    work_step["targetValueTwo"] = szybciej
                 else:
                     work_step["targetType"] = {
                         "workoutTargetTypeId": 1,
@@ -684,7 +707,7 @@ class GarminWorkoutUploader:
                     step_id += 1
 
                     # Tempo finish
-                    pace_mps = self.pace_to_mps(details['tempo_pace'])
+                    wolniej, szybciej = self.pace_window(details['tempo_pace'])
                     tempo_step = {
                         "type": "ExecutableStepDTO",
                         "stepId": step_id,
@@ -697,8 +720,8 @@ class GarminWorkoutUploader:
                             "workoutTargetTypeId": 6,
                             "workoutTargetTypeKey": "pace.zone"
                         },
-                        "targetValueOne": pace_mps - 0.15,
-                        "targetValueTwo": pace_mps + 0.15
+                        "targetValueOne": wolniej,
+                        "targetValueTwo": szybciej
                     }
                     tempo_step.update(self.create_distance_condition(details['tempo_km'] * 1000))
                     steps.append(tempo_step)
